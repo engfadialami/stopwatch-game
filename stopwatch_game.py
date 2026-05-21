@@ -18,9 +18,10 @@ PIN_PULSE_10  = 25   # physical pin 22 -> x10 sec pulse
 PIN_RESET_MAIN = 12  # physical pin 32 -> reset x10 and x1 digits
 PIN_RESET_LOW  = 7   # physical pin 26 -> reset x0.1 and x0.01 digits
 
-PIN_BUTTON = 16      # physical pin 36
-PIN_TEST_WIN = 20    # physical pin 38
-PIN_TEST_FAIL = 21   # physical pin 40
+PIN_BUTTON = 16      # physical pin 36 -> main button
+PIN_TEST_WIN = 20    # physical pin 38 -> test win button
+
+PIN_WIDE_MODE = 21   # physical pin 40 -> wide win mode switch
 
 # =========================
 # TIMING
@@ -34,11 +35,13 @@ READY_DELAY_SEC = 1.0
 BUTTON_LOCK_AFTER_STOP_SEC = 2.0
 DEBOUNCE_SEC = 0.05
 
-TARGET_COUNT = 1000
-TIMEOUT_COUNT = 2500
-TEST_FAIL_COUNT = 1030
+TARGET_COUNT = 1000       # 10.00
+TIMEOUT_COUNT = 2500      # 25.00
 
-WIN_TOLERANCE_COUNTS = 0
+# Wide mode range:
+# 09.70 to 10.20
+WIDE_WIN_MIN = 970
+WIDE_WIN_MAX = 1020
 
 # =========================
 # SOUNDS
@@ -95,7 +98,11 @@ def setup_gpio():
 
     GPIO.setup(PIN_BUTTON, GPIO.IN, pull_up_down=GPIO.PUD_UP)
     GPIO.setup(PIN_TEST_WIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-    GPIO.setup(PIN_TEST_FAIL, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+    # Wide mode switch:
+    # OFF = HIGH
+    # ON  = LOW
+    GPIO.setup(PIN_WIDE_MODE, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
 
 def stop_sound():
@@ -148,12 +155,6 @@ def pulse(pin):
     GPIO.output(pin, GPIO.LOW)
 
 
-def reset_main_digits():
-    GPIO.output(PIN_RESET_MAIN, GPIO.HIGH)
-    time.sleep(RESET_HOLD_SEC)
-    GPIO.output(PIN_RESET_MAIN, GPIO.LOW)
-
-
 def reset_low_digits():
     GPIO.output(PIN_RESET_LOW, GPIO.HIGH)
     time.sleep(RESET_HOLD_SEC)
@@ -165,7 +166,9 @@ def reset_all_digits():
 
     GPIO.output(PIN_RESET_MAIN, GPIO.HIGH)
     GPIO.output(PIN_RESET_LOW, GPIO.HIGH)
+
     time.sleep(RESET_HOLD_SEC)
+
     GPIO.output(PIN_RESET_MAIN, GPIO.LOW)
     GPIO.output(PIN_RESET_LOW, GPIO.LOW)
 
@@ -208,8 +211,30 @@ def wait_input_release(pin):
         time.sleep(0.01)
 
 
-def is_win():
-    return abs(count_cs - TARGET_COUNT) <= WIN_TOLERANCE_COUNTS
+def wide_mode_enabled():
+    return GPIO.input(PIN_WIDE_MODE) == GPIO.LOW
+
+
+def is_win_now():
+    if wide_mode_enabled():
+        return WIDE_WIN_MIN <= count_cs <= WIDE_WIN_MAX
+    else:
+        return count_cs == TARGET_COUNT
+
+
+def continue_until_10_00():
+    global next_tick
+
+    next_tick = time.monotonic() + TICK_SEC
+
+    while count_cs < TARGET_COUNT:
+        now = time.monotonic()
+
+        if now >= next_tick:
+            increment_display()
+            next_tick += TICK_SEC
+
+        time.sleep(0.001)
 
 
 def enter_home():
@@ -234,7 +259,14 @@ def enter_frozen_after_stop(force_fail=False):
     state = STATE_FROZEN
     button_locked_until = time.monotonic() + BUTTON_LOCK_AFTER_STOP_SEC
 
-    if (not force_fail) and is_win():
+    if force_fail:
+        play_sound(SOUND_FAIL, ENABLE_FAIL_SOUND, loop=False)
+        return
+
+    if is_win_now():
+        if wide_mode_enabled() and count_cs < TARGET_COUNT:
+            continue_until_10_00()
+
         win_correct_display_to_10_00()
         play_sound(SOUND_WIN, ENABLE_WIN_SOUND, loop=False)
     else:
@@ -247,25 +279,22 @@ def reset_game_to_home():
     enter_home()
 
 
-def auto_test_run(target_count):
+def auto_test_win():
     global next_tick
 
     reset_all_digits()
     enter_running()
 
-    while count_cs < target_count:
+    while count_cs < TARGET_COUNT:
         now = time.monotonic()
 
         if now >= next_tick:
-            if count_cs >= target_count:
-                break
-
             increment_display()
             next_tick += TICK_SEC
 
         time.sleep(0.001)
 
-    enter_frozen_after_stop(force_fail=(target_count != TARGET_COUNT))
+    enter_frozen_after_stop(force_fail=False)
 
 
 def main():
@@ -280,17 +309,14 @@ def main():
         while True:
             now = time.monotonic()
 
+            # Test win button still works
             if state in [STATE_HOME, STATE_FROZEN]:
                 if now >= ready_time and now >= button_locked_until:
-
                     if input_pressed(PIN_TEST_WIN):
                         wait_input_release(PIN_TEST_WIN)
-                        auto_test_run(TARGET_COUNT)
+                        auto_test_win()
 
-                    elif input_pressed(PIN_TEST_FAIL):
-                        wait_input_release(PIN_TEST_FAIL)
-                        auto_test_run(TEST_FAIL_COUNT)
-
+            # Main button
             if input_pressed(PIN_BUTTON):
                 wait_input_release(PIN_BUTTON)
 
@@ -307,6 +333,7 @@ def main():
                     if now >= button_locked_until:
                         reset_game_to_home()
 
+            # Running counter
             if state == STATE_RUNNING:
                 now = time.monotonic()
 
