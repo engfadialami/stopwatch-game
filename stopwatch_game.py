@@ -20,8 +20,7 @@ PIN_RESET_LOW  = 7   # physical pin 26 -> reset x0.1 and x0.01 digits
 
 PIN_BUTTON = 16      # physical pin 36 -> main button
 PIN_TEST_WIN = 20    # physical pin 38 -> test win button
-
-PIN_WIDE_MODE = 21   # physical pin 40 -> wide win mode switch
+PIN_WIDE_MODE = 21   # physical pin 40 -> wide mode switch
 
 # =========================
 # TIMING
@@ -35,11 +34,9 @@ READY_DELAY_SEC = 1.0
 BUTTON_LOCK_AFTER_STOP_SEC = 2.0
 DEBOUNCE_SEC = 0.05
 
-TARGET_COUNT = 1000       # 10.00
-TIMEOUT_COUNT = 2500      # 25.00
+TARGET_COUNT = 1000
+TIMEOUT_COUNT = 2500
 
-# Wide mode range:
-# 09.70 to 10.20
 WIDE_WIN_MIN = 970
 WIDE_WIN_MAX = 1020
 
@@ -98,10 +95,6 @@ def setup_gpio():
 
     GPIO.setup(PIN_BUTTON, GPIO.IN, pull_up_down=GPIO.PUD_UP)
     GPIO.setup(PIN_TEST_WIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-
-    # Wide mode switch:
-    # OFF = HIGH
-    # ON  = LOW
     GPIO.setup(PIN_WIDE_MODE, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
 
@@ -215,8 +208,8 @@ def wide_mode_enabled():
     return GPIO.input(PIN_WIDE_MODE) == GPIO.LOW
 
 
-def is_win_now():
-    if wide_mode_enabled():
+def is_win_now(wide_mode):
+    if wide_mode:
         return WIDE_WIN_MIN <= count_cs <= WIDE_WIN_MAX
     else:
         return count_cs == TARGET_COUNT
@@ -263,8 +256,10 @@ def enter_frozen_after_stop(force_fail=False):
         play_sound(SOUND_FAIL, ENABLE_FAIL_SOUND, loop=False)
         return
 
-    if is_win_now():
-        if wide_mode_enabled() and count_cs < TARGET_COUNT:
+    wide_mode_at_stop = wide_mode_enabled()
+
+    if is_win_now(wide_mode_at_stop):
+        if wide_mode_at_stop and count_cs < TARGET_COUNT:
             continue_until_10_00()
 
         win_correct_display_to_10_00()
@@ -309,7 +304,7 @@ def main():
         while True:
             now = time.monotonic()
 
-            # Test win button still works
+            # Test win button
             if state in [STATE_HOME, STATE_FROZEN]:
                 if now >= ready_time and now >= button_locked_until:
                     if input_pressed(PIN_TEST_WIN):
